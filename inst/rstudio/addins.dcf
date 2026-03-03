@@ -1,0 +1,14 @@
+Name: Start AiR
+Description: Start listener and open AiR panel
+Binding: air_start
+Interactive: false
+
+Name: Open AiR Panel
+Description: Opens the AiR panel in Viewer
+Binding: rstudioai_open_panel
+Interactive: false
+
+Name: Stop AiR
+Description: Stops the AiR listener
+Binding: rstudioai_stop_listener
+Interactive: false

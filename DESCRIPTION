@@ -1,0 +1,20 @@
+Package: AiR
+Type: Package
+Title: AI Assistant for RStudio
+Version: 0.1.0
+Authors@R: person("Thibishan", "Sribaskaran", role = c("aut", "cre"),
+    email = "thibishan.sribaskaran@gmail.com")
+Description: An AI-powered coding assistant that runs inside RStudio.
+    Fix errors, generate EDA reports, clean data, and edit code — all from
+    inside your Viewer pane. Works with the AiR cloud backend.
+License: MIT + file LICENSE
+URL: https://air-website-pink.vercel.app
+BugReports: https://github.com/useAiRStudio/air-package/issues
+Encoding: UTF-8
+LazyData: true
+Imports:
+    rstudioapi,
+    httr,
+    jsonlite,
+    later
+RoxygenNote: 7.3.1
