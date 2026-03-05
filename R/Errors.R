@@ -1,22 +1,9 @@
 # errors.R - Error detection and reporting for AiR
-# 
-# Three layers of error capture:
-# 1. Global error handler (options(error=...)) — catches interactive R errors
-# 2. air_knit() wrapper — captures Rmd render errors and output
-# 3. capture_output_context() — grabs session state (packages, objects, console)
-#
-# The backend needs ALL of these to diagnose issues properly.
-
-# Store error handler state
 .air_error_state <- new.env(parent = emptyenv())
 .air_error_state$installed <- FALSE
 .air_error_state$last_reported <- ""
 .air_error_state$last_render_output <- ""
 .air_error_state$last_render_error <- ""
-
-# ============================================
-# CORE: Report error to backend
-# ============================================
 
 #' Report an error to the AiR backend
 #' @param error The error message
@@ -47,10 +34,6 @@ report_error_to_air <- function(error, call = NULL, file = NULL, line = NULL, tr
   })
   invisible(NULL)
 }
-
-# ============================================
-# LAYER 1: Global error handler
-# ============================================
 
 #' Install a global error handler that reports to AiR
 #' @export
@@ -118,25 +101,72 @@ auto_install_error_handler <- function() {
   }
 }
 
-# ============================================
-# LAYER 2: Knit/Render wrapper
-# This is the big one — options(error=...) does NOT
-# catch errors inside rmarkdown::render(). We need
-# a wrapper that captures the full render output.
-# ============================================
+#' Core render capture — shared by air_knit() and execute_re_knit()
+#' @param input_file Path to .Rmd file
+#' @param output_format Output format (NULL for default)
+#' @param ... Additional arguments passed to rmarkdown::render()
+#' @return list(output = character, error = character or NULL, result = path or NULL)
+#' @keywords internal
+capture_render <- function(input_file, output_format = NULL, ...) {
+  render_output <- ""
+  render_error <- NULL
+  render_result <- NULL
+  output_con <- textConnection("render_log_cap", "w", local = FALSE)
+  sink_active <- FALSE
+
+  tryCatch({
+    withCallingHandlers(
+      {
+        sink(output_con, type = "output")
+        sink(output_con, type = "message")
+        sink_active <- TRUE
+        on.exit({
+          if (sink_active) {
+            tryCatch(sink(type = "message"), error = function(x) NULL)
+            tryCatch(sink(type = "output"), error = function(x) NULL)
+            sink_active <<- FALSE
+          }
+          tryCatch(close(output_con), error = function(e) NULL)
+        }, add = TRUE)
+
+        render_result <- rmarkdown::render(
+          input = input_file,
+          output_format = output_format,
+          envir = new.env(parent = globalenv()),
+          quiet = FALSE,
+          ...
+        )
+
+        sink(type = "message")
+        sink(type = "output")
+        sink_active <- FALSE
+        render_output <- paste(get("render_log_cap", envir = parent.frame(2)), collapse = "\n")
+      },
+      message = function(m) invokeRestart("muffleMessage"),
+      warning = function(w) invokeRestart("muffleWarning")
+    )
+  }, error = function(e) {
+    if (sink_active) {
+      tryCatch(sink(type = "message"), error = function(x) NULL)
+      tryCatch(sink(type = "output"), error = function(x) NULL)
+      sink_active <<- FALSE
+    }
+    render_error <<- e$message
+    render_output <<- tryCatch(
+      paste(get("render_log_cap", envir = parent.frame(4)), collapse = "\n"),
+      error = function(x) ""
+    )
+  })
+
+  list(output = render_output, error = render_error, result = render_result)
+}
 
 #' Knit an Rmd file and capture ALL output for AiR error diagnosis
-#' 
-#' Use this instead of the Knit button when you want AiR to be able
-#' to diagnose render errors. It captures the full render log including
-#' chunk-level errors, quitting lines, and package messages.
-#'
 #' @param input Path to the .Rmd file. If NULL, uses the active document.
 #' @param output_format Output format (default: "html_document")
 #' @param ... Additional arguments passed to rmarkdown::render()
 #' @export
 air_knit <- function(input = NULL, output_format = NULL, ...) {
-  # Default to active document
   if (is.null(input)) {
     if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
       ctx <- rstudioapi::getActiveDocumentContext()
@@ -148,130 +178,41 @@ air_knit <- function(input = NULL, output_format = NULL, ...) {
       stop("No input file specified and RStudio API not available.")
     }
   }
-  
+
   air_log("[AiR] Knitting: ", input)
-  
-  # Capture ALL output from render — stdout, stderr, messages
-  render_output <- character(0)
-  render_error <- NULL
-  
-  # Use a connection to capture output
-  output_con <- textConnection("render_log", "w", local = FALSE)
-  
+  r <- capture_render(input, output_format, ...)
+
+  .air_error_state$last_render_output <- r$output
+
   tryCatch({
-    # Capture both stdout and messages
-    withCallingHandlers(
-      {
-        sink(output_con, type = "output")
-        sink(output_con, type = "message")
-        
-        result <- rmarkdown::render(
-          input = input,
-          output_format = output_format,
-          envir = new.env(parent = globalenv()),
-          ...
-        )
-        
-        sink(type = "message")
-        sink(type = "output")
-        
-        render_output <- get("render_log", envir = parent.frame(2))
-      },
-      message = function(m) {
-        # Let messages through but also capture them
-        invokeRestart("muffleMessage")
-      },
-      warning = function(w) {
-        invokeRestart("muffleWarning")
-      }
-    )
-    
-    air_log("[AiR] Knit successful: ", result)
-    
-  }, error = function(e) {
-    # Make sure sinks are closed
-    tryCatch(sink(type = "message"), error = function(x) NULL)
-    tryCatch(sink(type = "output"), error = function(x) NULL)
-    
-    render_error <<- e
-    render_output <<- tryCatch(
-      get("render_log", envir = parent.frame(4)),
-      error = function(x) character(0)
-    )
-    
-  }, finally = {
-    tryCatch(close(output_con), error = function(e) NULL)
-  })
-  
-  # Build the full render log string
-  render_log_str <- paste(render_output, collapse = "\n")
-  
-  # Store for later retrieval
-  .air_error_state$last_render_output <- render_log_str
-  
-  # Send to backend — this is what the error fixer reads
-  tryCatch({
-    # Send render output
     air_post("/report_output", list(
-      console_output = "",
-      terminal_output = "",
-      render_output = render_log_str
+      console_output = "", terminal_output = "", render_output = r$output
     ), timeout_secs = 3)
-    
-    # If there was an error, also report it as an error
-    if (!is.null(render_error)) {
-      .air_error_state$last_reported <- ""  # Reset to allow reporting
-      .air_error_state$last_render_error <- render_error$message
-      
-      # Build detailed error info
-      error_msg <- render_error$message
-      
-      # Extract "Quitting from lines X-Y" if present
-      quit_lines <- grep("Quitting from lines", render_log_str, value = TRUE)
+
+    if (!is.null(r$error)) {
+      .air_error_state$last_reported <- ""
+      .air_error_state$last_render_error <- r$error
+      error_msg <- r$error
+      quit_lines <- grep("Quitting from lines", r$output, value = TRUE)
       if (length(quit_lines) > 0) {
         error_msg <- paste(error_msg, "\n", paste(quit_lines, collapse = "\n"))
       }
-      
       report_error_to_air(
-        error = error_msg,
-        file = input,
-        traceback = c(
-          paste("=== RENDER LOG (last 50 lines) ==="),
-          tail(render_output, 50)
-        )
+        error = error_msg, file = input,
+        traceback = c("=== RENDER LOG (last 50 lines) ===", tail(strsplit(r$output, "\n")[[1]], 50))
       )
-      
-      air_log("[AiR] Render error captured and reported")
-      
-      # Re-throw so the user sees the error
-      stop(render_error$message, call. = FALSE)
+      stop(r$error, call. = FALSE)
     }
-    
   }, error = function(e) {
-    if (!is.null(render_error)) {
-      stop(render_error$message, call. = FALSE)
-    }
+    if (!is.null(r$error)) stop(r$error, call. = FALSE)
   })
-  
-  invisible(result)
+
+  air_log("[AiR] Knit successful: ", r$result)
+  invisible(r$result)
 }
 
-#' Shortcut: knit the active document with AiR capture
-#' @export
-air_render <- air_knit
-
-# ============================================
-# LAYER 3: Session state capture
-# Sends loaded packages, environment objects,
-# last error, and console output to the backend.
-# Called automatically by the listener before syncs.
-# ============================================
-
+# Session state capture
 #' Capture and send full session context to AiR
-#' 
-#' Gathers: loaded packages, environment objects, last error,
-#' traceback, and any stored render output. Sends everything
-#' to /report_output so the error fixer has maximum context.
 #' @export
 capture_output_context <- function() {
   tryCatch({
@@ -377,52 +318,19 @@ capture_output_context <- function() {
   invisible(NULL)
 }
 
-# ============================================
-# MANUAL HELPERS
-# For when automatic capture doesn't work
-# ============================================
-
-#' Get the last error from R and report it to AiR
+#' Check and report the last R error to AiR
 #' @export
 check_and_report_last_error <- function() {
-  last_err <- geterrmessage()
-  
-  if (nchar(last_err) > 0 && last_err != .air_error_state$last_reported) {
-    tb <- tryCatch({
-      capture.output(traceback())
-    }, error = function(e) NULL)
-    
-    report_error_to_air(
-      error = last_err,
-      traceback = tb
-    )
-    
-    # Also send full context
-    capture_output_context()
-    
-    return(TRUE)
-  }
-  return(FALSE)
-}
-
-#' Manually report what you see in the console
-#' @param error_text The error text you see in the console
-#' @export
-report_error_text <- function(error_text) {
-  if (missing(error_text) || nchar(error_text) == 0) {
-    message("Usage: report_error_text(\"Error: object 'x' not found\")")
-    return(invisible(FALSE))
-  }
-  
+  err <- geterrmessage()
+  if (nchar(err) == 0 || err == .air_error_state$last_reported) return(FALSE)
   .air_error_state$last_reported <- ""
-  report_error_to_air(error = error_text)
+  tb <- tryCatch(capture.output(traceback()), error = function(e) NULL)
+  report_error_to_air(error = err, traceback = tb)
   capture_output_context()
-  message("Error reported to AiR. Ask it to fix the error.")
-  invisible(TRUE)
+  TRUE
 }
 
-#' Capture and report error from console output  
-#' Call this manually after seeing an error in the console
+#' Report the last console error to AiR
 #' @export
 report_last_console_error <- function() {
   err <- geterrmessage()
@@ -430,16 +338,26 @@ report_last_console_error <- function() {
     message("No recent error found. Run this right after an error occurs.")
     return(invisible(FALSE))
   }
-  
   .air_error_state$last_reported <- ""
-  
-  tb <- tryCatch({
-    capture.output(traceback())
-  }, error = function(e) NULL)
-  
+  tb <- tryCatch(capture.output(traceback()), error = function(e) NULL)
   report_error_to_air(error = err, traceback = tb)
   capture_output_context()
   message("Error reported to AiR. You can now ask it to fix the error.")
+  invisible(TRUE)
+}
+
+#' Manually report error text to AiR
+#' @param error_text The error text you see in the console
+#' @export
+report_error_text <- function(error_text) {
+  if (missing(error_text) || nchar(error_text) == 0) {
+    message("Usage: report_error_text(\"Error: object 'x' not found\")")
+    return(invisible(FALSE))
+  }
+  .air_error_state$last_reported <- ""
+  report_error_to_air(error = error_text)
+  capture_output_context()
+  message("Error reported to AiR. Ask it to fix the error.")
   invisible(TRUE)
 }
 

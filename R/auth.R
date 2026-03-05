@@ -82,12 +82,3 @@ air_get_key <- function() {
   if (!file.exists(rc)) return("")
   trimws(readLines(rc, n = 1, warn = FALSE))
 }
-
-#' Get the AiR backend URL
-#' @description Returns the backend URL. Priority:
-#' (1) getOption("air.backend_url"), (2) AIR_BACKEND_URL env var, (3) cloud default
-#' @return Character string URL (no trailing slash)
-#' @export
-air_get_url <- function() {
-  get_backend_url()
-}

@@ -1,43 +1,32 @@
-# AiR.R - Main entry point for AiR package
-
 #' @title AiR - AI Assistant for RStudio
 #' @description
-#' An AI-powered coding assistant that runs inside RStudio.
-#' Fix errors, generate EDA reports, and edit code — all from
-#' inside your RStudio Viewer pane.
+#' An AI-powered editing assistant that runs inside RStudio.
 #'
 #' @section Quick Start:
 #' \enumerate{
-#'   \item Log in: \code{air_login()}
-#'   \item That's it! AiR starts automatically after login.
-#' }
-#'
-#' @section Main Functions:
-#' \describe{
-#'   \item{\code{air_login()}}{Log in and start AiR}
-#'   \item{\code{air_start()}}{Start the AiR panel (called automatically after login)}
-#'   \item{\code{air_stop()}}{Stop AiR}
+#'   \item Start the Node.js backend: \code{node server.js}
+#'   \item Load the package: \code{devtools::load_all()}
+#'   \item Start the listener: \code{rstudioai_start_listener()}
+#'   \item Open the panel: \code{rstudioai_open_panel()}
 #' }
 #'
 #' @docType package
-#' @name AiR
+#' @name rstudioai
 NULL
 
-#' Start AiR - open the panel and begin listening
+#' Quick setup - start listener and open panel
 #' @export
 air_start <- function() {
   if (!backend_is_running()) {
-    stop("Cannot reach AiR backend. Check your internet connection or run air_login() first.")
+    stop("Backend not running. Start it with: node server.js")
   }
-
   rstudioai_start_listener()
   Sys.sleep(0.5)
   rstudioai_open_panel()
-
   message("AiR is ready!")
 }
 
-#' Stop AiR
+#' Stop everything
 #' @export
 air_stop <- function() {
   rstudioai_stop_listener()

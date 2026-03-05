@@ -1,15 +1,9 @@
-# state.R - Shared state and queue utilities for RStudioAI
+# state.R - Shared state and queue utilities
 
-# -----------------------------------
-# Debug logging — silent by default, enable with options(air.debug = TRUE)
-# -----------------------------------
 air_log <- function(...) {
   if (isTRUE(getOption("air.debug"))) message(...)
 }
 
-# -----------------------------------
-# Runtime state (singleton)
-# -----------------------------------
 if (!exists(".rstudioai_env", envir = .GlobalEnv)) {
   assign(".rstudioai_env", new.env(parent = emptyenv()), envir = .GlobalEnv)
 }
@@ -17,9 +11,6 @@ if (!exists(".rstudioai_env", envir = .GlobalEnv)) {
 .rstudioai_env <- get(".rstudioai_env", envir = .GlobalEnv)
 .rstudioai_env$listener_running <- FALSE
 
-# -----------------------------------
-# Queue path (single source of truth)
-# -----------------------------------
 queue_path <- function() {
   file.path(path.expand("~"), ".rstudioai", "queue.json")
 }
@@ -32,13 +23,6 @@ queue_exists <- function() {
   file.exists(queue_path())
 }
 
-queue_size <- function() {
-  if (queue_exists()) 1 else 0
-}
-
-# -----------------------------------
-# Queue operations
-# -----------------------------------
 queue_patches <- function(patches) {
   dir.create(queue_dir(), showWarnings = FALSE, recursive = TRUE)
   

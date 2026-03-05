@@ -142,6 +142,53 @@ get_environment_summary <- function(env = globalenv(), max_rows = 3,
 
         mem_bytes <- as.numeric(utils::object.size(obj))
 
+        # Structured head data for preview table (first 5 rows)
+        head_rows <- utils::head(obj, 5)
+        head_data <- tryCatch({
+          lapply(seq_len(nrow(head_rows)), function(i) {
+            row <- lapply(col_names, function(cn) {
+              val <- head_rows[[cn]][i]
+              if (is.na(val)) return(NULL)
+              if (is.factor(val) || is.character(val)) return(as.character(val))
+              if (inherits(val, c("Date", "POSIXct", "POSIXlt"))) return(as.character(val))
+              val
+            })
+            names(row) <- col_names
+            row
+          })
+        }, error = function(e) list())
+
+        # Correlations between numeric columns (top 10 by |r|)
+        numeric_cols <- col_names[sapply(col_names, function(cn) {
+          classify_column_type(obj[[cn]]) == "numeric"
+        })]
+        correlations <- list()
+        if (length(numeric_cols) >= 2) {
+          cor_mat <- tryCatch(
+            stats::cor(obj[, numeric_cols, drop = FALSE], use = "pairwise.complete.obs"),
+            error = function(e) NULL
+          )
+          if (!is.null(cor_mat)) {
+            pairs <- list()
+            for (i in seq_along(numeric_cols)) {
+              for (j in seq_len(i - 1)) {
+                r <- cor_mat[i, j]
+                if (!is.na(r)) {
+                  pairs[[length(pairs) + 1]] <- list(
+                    var1 = numeric_cols[i], var2 = numeric_cols[j],
+                    r = round(r, 3)
+                  )
+                }
+              }
+            }
+            pairs <- pairs[order(-sapply(pairs, function(p) abs(p$r)))]
+            correlations <- utils::head(pairs, 10)
+          }
+        }
+
+        # Duplicate row count
+        duplicate_rows <- tryCatch(as.integer(sum(duplicated(obj))), error = function(e) 0L)
+
         dataframes[[length(dataframes) + 1]] <- list(
           name = name,
           class = class(obj)[1],
@@ -149,7 +196,10 @@ get_environment_summary <- function(env = globalenv(), max_rows = 3,
           columns = col_meta,
           total_columns = total_cols,
           memory_bytes = mem_bytes,
-          head = utils::capture.output(print(utils::head(obj, max_rows)))
+          head = utils::capture.output(print(utils::head(obj, max_rows))),
+          head_data = head_data,
+          correlations = correlations,
+          duplicate_rows = duplicate_rows
         )
       } else if (is.function(obj)) {
         functions[[length(functions) + 1]] <- list(

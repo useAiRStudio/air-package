@@ -1,0 +1,8 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.Rhistory$
+^\.DS_Store$
+^.*_eda\.Rmd$
+^.*_eda\.html$
+^.*_eda_files$
+^.*_files$

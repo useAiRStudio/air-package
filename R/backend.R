@@ -1,12 +1,8 @@
-# backend.R - Communication with AiR cloud backend
-
-# ============================================
-# Backend URL configuration
-# ============================================
+# backend.R - Communication with Node.js backend
 
 #' Get the AiR backend URL
 #' @description Returns the backend URL from options, env var, or default.
-#' Priority: (1) getOption("air.backend_url"), (2) AIR_BACKEND_URL env var, (3) AiR cloud default
+#' Priority: (1) getOption("air.backend_url"), (2) AIR_BACKEND_URL env var, (3) localhost:3001
 #' @return Character string URL (no trailing slash)
 #' @export
 get_backend_url <- function() {
@@ -51,39 +47,6 @@ air_get <- function(endpoint, timeout_secs = 5) {
     air_auth_header(),
     httr::timeout(timeout_secs)
   )
-}
-
-# ============================================
-# Backend communication functions
-# ============================================
-
-#' Call the AI backend
-#' @param mode Either "code" or "explain"
-#' @param instruction The user's instruction
-#' @param selected_code Currently selected code
-#' @param full_file Full file contents
-#' @return Parsed JSON response from backend
-call_backend <- function(mode, instruction, selected_code, full_file) {
-  body <- list(
-    mode = mode,
-    instruction = instruction,
-    selectedCode = selected_code,
-    fullFile = full_file
-  )
-
-  resp <- tryCatch(
-    air_post("/ai", body, timeout_secs = 60),
-    error = function(e) {
-      stop("Backend connection failed. Is the server running? Error: ", e$message)
-    }
-  )
-
-  if (httr::http_error(resp)) {
-    stop("Backend returned error: ", httr::status_code(resp))
-  }
-
-  txt <- httr::content(resp, as = "text", encoding = "UTF-8")
-  jsonlite::fromJSON(txt, simplifyVector = FALSE)
 }
 
 #' Sync current context to backend

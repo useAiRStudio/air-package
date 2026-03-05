@@ -18,9 +18,6 @@ rstudioai_stop_listener <- function() {
   rstudioai_stop_listener_internal()
 }
 
-# -----------------------------------
-# Internal state for proactive capture
-# -----------------------------------
 .listener_state <- new.env(parent = emptyenv())
 .listener_state$last_error_msg <- ""
 .listener_state$last_error_time <- 0
@@ -32,9 +29,6 @@ rstudioai_stop_listener <- function() {
 .listener_state$last_active_path <- ""
 .listener_state$last_smart_sync_time <- 0
 
-# -----------------------------------
-# Internal listener implementation
-# -----------------------------------
 rstudioai_start_listener_internal <- function(poll_ms = 500) {
   if (.rstudioai_env$listener_running) {
     message("Listener already running.")
@@ -51,9 +45,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
 
     .listener_state$tick_count <- .listener_state$tick_count + 1L
 
-    # ==============================================
-    # PROACTIVE CAPTURE (every ~3 seconds = 6 ticks)
-    # ==============================================
+    # Proactive capture (every ~3 seconds)
     if (.listener_state$tick_count %% 6L == 0L) {
       tryCatch({
         current_err <- trimws(geterrmessage())
@@ -114,9 +106,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       }, error = function(e) NULL)
     }
 
-    # ==============================================
-    # PROACTIVE FILE TRACKING (every ~2 seconds = 4 ticks)
-    # ==============================================
+    # File tracking (every ~2 seconds)
     if (.listener_state$tick_count %% 4L == 2L) {
       tryCatch({
         ctx <- rstudioapi::getSourceEditorContext()
@@ -131,9 +121,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       }, error = function(e) NULL)
     }
 
-    # ==============================================
-    # PROACTIVE SMART SYNC (every ~30 seconds)
-    # ==============================================
+    # Smart sync (every ~30 seconds)
     if (.listener_state$tick_count %% 60L == 5L) {
       now <- as.numeric(Sys.time())
       if ((now - .listener_state$last_smart_sync_time) > 25) {
@@ -144,9 +132,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       }
     }
 
-    # ==============================================
-    # TOOL REQUEST HANDLER (poll HTTP every ~1s + check local file)
-    # ==============================================
+    # Tool request handler
     if (!.listener_state$tool_busy && .listener_state$tick_count %% 2L == 0L) {
       tool_req <- NULL
 
@@ -206,9 +192,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       }
     }
 
-    # ==============================================
-    # ACTION QUEUE (poll HTTP every ~1s + check local files)
-    # ==============================================
+    # Action queue
     if (.listener_state$tick_count %% 2L == 1L) {
     action <- NULL
 
@@ -291,9 +275,7 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
     }
     } # end action queue tick guard
 
-    # ==============================================
-    # MAIN QUEUE
-    # ==============================================
+    # Main queue
     if (queue_exists()) {
       payload <- read_queue()
       clear_queue()
@@ -354,9 +336,6 @@ rstudioai_stop_listener_internal <- function() {
   invisible(TRUE)
 }
 
-# -----------------------------------
-# Patch Application (legacy)
-# -----------------------------------
 apply_patches <- function(patches) {
   ctx <- rstudioapi::getActiveDocumentContext()
   if (is.null(ctx$id) || ctx$id == "") return(invisible(NULL))
@@ -406,10 +385,6 @@ apply_patches <- function(patches) {
   invisible(NULL)
 }
 
-# -----------------------------------
-# Tool Executor
-# -----------------------------------
-
 #' @keywords internal
 execute_tool <- function(tool_name, args) {
   switch(tool_name,
@@ -428,11 +403,7 @@ execute_tool <- function(tool_name, args) {
 #' @keywords internal
 execute_re_knit <- function(args) {
   input_file <- args$file
-
-  # Expand ~ to user's actual home directory
-  if (!is.null(input_file) && nchar(input_file) > 0) {
-    input_file <- path.expand(input_file)
-  }
+  if (!is.null(input_file) && nchar(input_file) > 0) input_file <- path.expand(input_file)
 
   if (is.null(input_file) || nchar(input_file) == 0) {
     tryCatch({
@@ -449,23 +420,16 @@ execute_re_knit <- function(args) {
 
   # If fixed content was provided, write it to disk AND update the editor
   if (!is.null(args$fixedContent) && nchar(args$fixedContent) > 0) {
-    air_log("[TOOL:re_knit] Writing fixed content to disk (", nchar(args$fixedContent), " chars)")
     tryCatch({
       writeLines(args$fixedContent, input_file, useBytes = TRUE)
-      air_log("[TOOL:re_knit] Disk write OK: ", input_file)
     }, error = function(e) air_log("[TOOL:re_knit] Disk write FAILED: ", e$message))
-
-    # Also update the editor buffer so user sees the fix
     tryCatch({
       ctx <- rstudioapi::getActiveDocumentContext()
       if (!is.null(ctx$id) && ctx$id != "" && ctx$id != "#console") {
         rstudioapi::setDocumentContents(args$fixedContent, id = ctx$id)
-        air_log("[TOOL:re_knit] Editor updated")
       }
-    }, error = function(e) air_log("[TOOL:re_knit] Editor update failed: ", e$message))
-
+    }, error = function(e) NULL)
   } else if (!isTRUE(args$skipSave)) {
-    # Normal path: save the editor to disk before rendering
     tryCatch({
       ctx <- rstudioapi::getActiveDocumentContext()
       if (!is.null(ctx$id) && ctx$id != "" && ctx$id != "#console") {
@@ -474,64 +438,16 @@ execute_re_knit <- function(args) {
     }, error = function(e) NULL)
   }
 
-  render_output <- ""
-  render_error <- NULL
-  output_con <- textConnection("render_log_capture", "w", local = FALSE)
-  sink_active <- FALSE
+  r <- capture_render(input_file)
 
-  tryCatch({
-    withCallingHandlers(
-      {
-        sink(output_con, type = "output")
-        sink(output_con, type = "message")
-        sink_active <- TRUE
-        on.exit({
-          if (sink_active) {
-            tryCatch(sink(type = "message"), error = function(x) NULL)
-            tryCatch(sink(type = "output"), error = function(x) NULL)
-            sink_active <<- FALSE
-          }
-          tryCatch(close(output_con), error = function(e) NULL)
-        }, add = TRUE)
+  if (is.null(r$error)) {
+    return(list(success = TRUE, error = "", render_output = r$output))
+  }
 
-        result <- rmarkdown::render(
-          input = input_file,
-          output_format = NULL,
-          envir = new.env(parent = globalenv()),
-          quiet = FALSE
-        )
-
-        sink(type = "message")
-        sink(type = "output")
-        sink_active <- FALSE
-        render_output <- paste(get("render_log_capture", envir = parent.frame(2)), collapse = "\n")
-      },
-      message = function(m) invokeRestart("muffleMessage"),
-      warning = function(w) invokeRestart("muffleWarning")
-    )
-
-    return(list(success = TRUE, error = "", render_output = render_output))
-
-  }, error = function(e) {
-    if (sink_active) {
-      tryCatch(sink(type = "message"), error = function(x) NULL)
-      tryCatch(sink(type = "output"), error = function(x) NULL)
-      sink_active <<- FALSE
-    }
-    render_error <<- e$message
-    render_output <<- tryCatch(
-      paste(get("render_log_capture", envir = parent.frame(4)), collapse = "\n"),
-      error = function(x) ""
-    )
-  })
-
-  full_output <- render_output
-  if (!is.null(render_error)) full_output <- paste(full_output, "\n\nError:", render_error)
-
+  full_output <- paste(r$output, "\n\nError:", r$error)
   .air_error_state$last_render_output <- full_output
-  .air_error_state$last_render_error <- render_error %||% ""
-
-  list(success = FALSE, error = render_error %||% "Unknown render error", render_output = full_output)
+  .air_error_state$last_render_error <- r$error
+  list(success = FALSE, error = r$error, render_output = full_output)
 }
 
 #' @keywords internal
@@ -562,33 +478,15 @@ execute_sync_context <- function(args) {
   tryCatch({
     tryCatch(capture_output_context(), error = function(e) NULL)
     ctx <- build_smart_context()
-
-    if (!is.null(ctx) && is.list(ctx)) {
-      tryCatch({
-        httr::POST(
-          paste0(get_backend_url(), "/smart_context"),
-          body = jsonlite::toJSON(ctx, auto_unbox = TRUE, null = "null"),
-          httr::content_type_json(),
-          air_auth_header(),
-          httr::timeout(5)
-        )
-      }, error = function(e) {
-        air_log("[TOOL:sync_context] POST failed: ", e$message)
-      })
-    }
-
-    active_path <- ctx$active_file$path %||% ""
-    active_len <- nchar(ctx$active_file$contents %||% "")
-    n_files <- ctx$project$file_count %||% 0
-    n_dfs <- length(ctx$environment$dataframes %||% list())
+    sync_smart_context()
 
     list(
       success = TRUE,
-      active_path = active_path,
+      active_path = ctx$active_file$path %||% "",
       active_contents = ctx$active_file$contents %||% "",
       active_selection = ctx$active_file$selection %||% "",
-      project_file_count = n_files,
-      dataframe_count = n_dfs
+      project_file_count = ctx$project$file_count %||% 0,
+      dataframe_count = length(ctx$environment$dataframes %||% list())
     )
   }, error = function(e) {
     air_log("[TOOL:sync_context] Error: ", e$message)
