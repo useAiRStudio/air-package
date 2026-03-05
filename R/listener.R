@@ -224,9 +224,20 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       if (action$type == "apply_patch") {
         tryCatch({
           new_code <- action$new_code
+          target_path <- action$file_path
           if (!is.null(new_code) && nchar(new_code) > 0) {
             ctx <- rstudioapi::getActiveDocumentContext()
             air_log("[APPLY] Document context: id=", ctx$id, " path=", ctx$path)
+
+            # If active doc is console/empty but we have a target path, navigate to it
+            if ((is.null(ctx$id) || ctx$id == "" || ctx$id == "#console") && !is.null(target_path)) {
+              air_log("[APPLY] Active doc not usable, navigating to: ", target_path)
+              rstudioapi::navigateToFile(target_path)
+              Sys.sleep(0.5)
+              ctx <- rstudioapi::getActiveDocumentContext()
+              air_log("[APPLY] After navigate: id=", ctx$id, " path=", ctx$path)
+            }
+
             if (!is.null(ctx$id) && ctx$id != "" && ctx$id != "#console") {
               air_log("[APPLY] Writing ", nchar(new_code), " chars to: ", ctx$path)
               rstudioapi::setDocumentContents(new_code, id = ctx$id)
@@ -236,7 +247,13 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
                 air_log("[APPLY] Could not auto-save: ", e$message))
               tryCatch(sync_smart_context(), error = function(e) NULL)
             } else {
-              air_log("[APPLY] Skipped: ctx$id is empty or #console")
+              # Last resort: write to disk if we have the path
+              if (!is.null(target_path) && nchar(target_path) > 0) {
+                air_log("[APPLY] Fallback: writing directly to disk: ", target_path)
+                writeLines(new_code, target_path)
+              } else {
+                air_log("[APPLY] Skipped: no usable document context or file path")
+              }
             }
           } else {
             air_log("[APPLY] Skipped: new_code is null or empty")
