@@ -51,14 +51,31 @@ if (interactive() && Sys.getenv("RSTUDIO") == "1") {
 }
 '
 
-  # Check if already installed
   if (file.exists(rprofile)) {
-    existing <- paste(readLines(rprofile, warn = FALSE), collapse = "\n")
+    lines <- readLines(rprofile, warn = FALSE)
+    # Remove any old rstudioai/Rgent hooks
+    old_start <- grep("Auto-start Rgent|rstudioai::", lines)
+    if (length(old_start) > 0) {
+      # Find the full old block and remove it
+      block_start <- min(old_start)
+      block_end <- block_start
+      brace_depth <- 0
+      found_brace <- FALSE
+      for (i in block_start:length(lines)) {
+        if (grepl("\\{", lines[i])) { brace_depth <- brace_depth + sum(gregexpr("\\{", lines[i])[[1]] > 0); found_brace <- TRUE }
+        if (grepl("\\}", lines[i])) brace_depth <- brace_depth - sum(gregexpr("\\}", lines[i])[[1]] > 0)
+        block_end <- i
+        if (found_brace && brace_depth <= 0) break
+      }
+      lines <- lines[-(block_start:block_end)]
+    }
+    existing <- paste(lines, collapse = "\n")
     if (grepl("AiR auto-start", existing, fixed = TRUE)) {
       message("[AiR] Auto-start already installed.")
       return(invisible(TRUE))
     }
-    # Append to existing .Rprofile
+    # Write cleaned file + new hook
+    writeLines(c(lines, ""), rprofile)
     cat(hook, file = rprofile, append = TRUE)
   } else {
     writeLines(hook, rprofile)
