@@ -121,10 +121,10 @@ rstudioai_start_listener_internal <- function(poll_ms = 500) {
       }, error = function(e) NULL)
     }
 
-    # Smart sync (every ~30 seconds)
-    if (.listener_state$tick_count %% 60L == 5L) {
+    # Smart sync (every ~5 seconds — keeps context fresh for tab switches)
+    if (.listener_state$tick_count %% 10L == 5L) {
       now <- as.numeric(Sys.time())
-      if ((now - .listener_state$last_smart_sync_time) > 25) {
+      if ((now - .listener_state$last_smart_sync_time) > 4) {
         .listener_state$last_smart_sync_time <- now
         tryCatch({
           sync_smart_context()
